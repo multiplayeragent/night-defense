@@ -1,0 +1,21 @@
+{
+  "name": "Night Defense",
+  "genre": "sandbox",
+  "dim": "3D",
+  "mode": "Co-op",
+  "players": "1–6",
+  "hook": "Build walls by day. Hold the core all night.",
+  "how": "By day you shoot gold crystals for scrap and spend it on walls, turrets and spike traps around the core. At night monsters pour out of four portals. Last as many nights as you can.",
+  "controls": "WASD and mouse, hold click to shoot, 1 to 3 to pick a build and click to place, or two thumb sticks and a PLACE button",
+  "uses": [
+    ["Leaderboard", "The most nights each player's team survived."],
+    ["Host-run rules", "The host's browser runs the day and night, every monster and every turret; if it leaves, the next player takes over."],
+    ["Bots", "AI teammates mine, build and fight until enough people join."],
+    ["Live sync", "Every builder, wall, turret shot and monster shows up for everyone at once."]
+  ],
+  "ideas": [
+    "Add a cannon tower that hits a whole group",
+    "Add a flying monster that skips the walls",
+    "Make it a snowy base with ice walls"
+  ]
+}
