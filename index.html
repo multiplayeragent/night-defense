@@ -46,6 +46,7 @@
   .card h2 { margin: 0; font-size: 26px; color: #ff7b9c; } .card h3 { margin: 14px 0 4px; font-size: 13px; color: #b7f6ff; text-align: left; }
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
   .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.mine { color: #ffd166; font-weight: 700; }
+  .card li.note { list-style: none; margin-left: -24px; opacity: .8; } /* a status line, not a numbered entry */
   .card p { margin: 10px 0 0; font-size: 13px; opacity: .8; }
   button.again { width: 100%; min-height: 48px; margin-top: 16px; border: 0; border-radius: 12px; background: #38e8ff; color: #04212a; font: 800 17px system-ui, sans-serif; cursor: pointer; }
   @media (max-width: 640px) {
@@ -75,7 +76,7 @@
 <div id="over" hidden><div class="card">
   <h2>The core fell</h2><div id="overSub"></div>
   <h3>Your team</h3><ol id="results"></ol>
-  <h3>Most nights survived</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Most nights survived</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="again" id="again">Play again</button><p id="next"></p>
 </div></div>
 <script type="module">
@@ -757,6 +758,11 @@ function stepBot(b, dt, g) {
   const dx = gx - b.x, dz = gz - b.z, d = Math.hypot(dx, dz);
   if (d > stand) { const step = Math.min(d - stand, CONFIG.speed * 0.8 * dt); b.x += dx / d * step; b.z += dz / d * step; }
   else if (goal.kind === "build") { applyBuild(goal.k, goal.i, b.id); b.goal = null; }
+  for (const o of team()) { // don't stand inside a teammate
+    if (o.id === b.id || o.down) continue;
+    const ox = b.x - o.x, oz = b.z - o.z, od = Math.hypot(ox, oz);
+    if (od < 1.1 && od > 0.001) { b.x += ox / od * (1.1 - od) * 0.5; b.z += oz / od * (1.1 - od) * 0.5; }
+  }
   keepInArena(b);
   const aim = target || (goal.kind === "mine" && d <= stand + 0.5 ? goal : null);
   if (!aim) { if (d > 0.5) b.a = Math.atan2(dx, dz); return; }
@@ -975,18 +981,18 @@ function hud(g) {
     $("overSub").textContent = nights ? `Your team survived ${nights} night${nights === 1 ? "" : "s"}.` : "It fell on the first night.";
     const rows = team().map((s) => ({ s, k: c.kills?.[s.id] || 0, m: c.mined?.[s.id] || 0 })).sort((x, y) => y.k - x.k);
     if (c.kills?.turrets) rows.push({ s: { name: "Turrets" }, k: c.kills.turrets, m: 0 });
-    $("results").innerHTML = rows.map(({ s, k, m }) => `<li class="${s === me ? "mine" : ""}">${esc(s === me ? myName : s.name)}<span>${k} kills${m ? ` · ${m} scrap` : ""}</span></li>`).join("");
+    $("results").innerHTML = rows.map(({ s, k, m }) => `<li class="${s === me ? "mine" : ""}">${esc(s === me ? myName : s.name)}<span>${k} kill${k === 1 ? "" : "s"}${m ?` · ${m} scrap` : ""}</span></li>`).join("");
     $("next").textContent = `New game in ${Math.max(0, Math.ceil((g.endsAt - t) / 1000))}s`;
     if (me.submittedFor !== g.id) { me.submittedFor = g.id; showBoard(nights); }
   }
 }
 function showBoard(nights) {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = `<li class="note">Leaderboards need a connection.</li>`; return; }
+  list.innerHTML = `<li class="note">Loading…</li>`;
   board.submit(nights).catch(() => null).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} night${e.score === 1 ? "" : "s"}</span></li>`).join("") : "<li>No scores yet. You're first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} night${e.score === 1 ? "" : "s"}</span></li>`).join("") : `<li class="note">No scores yet. You're first.</li>`;
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 $("again").onclick = () => { if (host.acting) host.again = true; else net.send("again", {}); };
 
