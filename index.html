@@ -111,7 +111,8 @@
  *     A new host adopts all of it from state and carries on: same night, same monsters.
  *   - You shoot on your own screen. A bullet that hits a monster sends `hit` {f}; one that
  *     hits a crystal sends `mine` {i}. Building sends `build` {k, x, y}; the host checks the
- *     tile and the team's scrap. "go" starts the night early, "again" starts a new game.
+ *     tile and the team's scrap; a hit or mine counts only from a survivor who is up, in reach,
+ *     and no faster than the blaster fires. "go" starts the night early, "again" a new game.
  *     The host applies its own intents directly (mp.send never comes back to the sender).
  *   - Turret shots are drawn by every screen from the synced turrets and monsters; only the
  *     host's turrets do damage. Monsters bite by event: the host sends `bite` {to, d} and only
@@ -601,7 +602,7 @@ function applySky(g, dt) {
 }
 
 // ── OUTPOST (HOST) ──────────────────────────────────────────────────────────────────
-const host = { acting: false, last: null, foes: new Map(), nextId: 0, queue: 0, spawnIn: 0, grid: [], ore: [], core: null, bots: new Map(), bites: {},
+const host = { acting: false, last: null, foes: new Map(), nextId: 0, queue: 0, spawnIn: 0, grid: [], ore: [], core: null, bots: new Map(), bites: {}, ammo: new Map(),
   go: false, again: false, gridDirty: false, oreDirty: false, coreDirty: false, lastGrid: 0, lastOre: 0, lastCore: 0, lastFoes: 0, lastBots: 0, lastBite: 0, foesJson: "", botsJson: "" };
 /** The game as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
 function game() {
@@ -700,6 +701,16 @@ function bite(to, d) {
   else host.bites[to] = (host.bites[to] || 0) + d; // sent 4 times a second, one event per bitten player
 }
 // The intents. Each checks what it is told; the host's own shots and builds call these directly.
+/** A "hit" or "mine" from another screen: only from a survivor who is up, within a bullet's reach of
+ *  what it hit, and no faster than the blaster fires (so a tampered client can't wipe the night out). */
+function shotOk(from, x, z) {
+  const s = team().find((p) => p.id === from);
+  if (!s || s.down || Math.hypot(s.x - x, s.z - z) > CONFIG.bulletSpeed * 0.45 + 3) return false;
+  const now = performance.now(), b = host.ammo.get(from) || { n: CONFIG.fireRate, at: now };
+  b.n = Math.min(CONFIG.fireRate, b.n + (now - b.at) / 1000 * CONFIG.fireRate * 1.25); b.at = now; host.ammo.set(from, b);
+  if (b.n < 1) return false;
+  b.n--; return true;
+}
 function applyHit(id, by) {
   const f = host.foes.get(id); if (!f) return;
   f.hp -= 1; if (f.hp <= 0) kill(id, by);
@@ -710,7 +721,7 @@ function applyMine(i, by) {
 }
 function applyBuild(k, i, by) {
   const g = game();
-  if (!g || g.phase === "over" || !CONFIG.costs[k] || !Number.isInteger(i) || !canBuild(host.grid, i) || host.core.scrap < CONFIG.costs[k]) return false;
+  if (!g || g.phase === "over" || !Object.hasOwn(CONFIG.costs, k) || !Number.isInteger(i) || !canBuild(host.grid, i) || host.core.scrap < CONFIG.costs[k]) return false;
   host.grid[i] = pieceChar(k, k === "wall" ? CONFIG.wallHp : CONFIG.turretHp); host.core.scrap -= CONFIG.costs[k];
   host.gridDirty = host.coreDirty = true; return true;
 }
@@ -741,7 +752,9 @@ function botGoal(b, g) {
     const i = (MID + dy) * N + MID + dx;
     if (gridNow()[i] === "." && canBuild(gridNow(), i)) { if (money >= CONFIG.costs[k]) return { kind: "build", k, i, x: tileX(MID + dx), z: tileX(MID + dy) }; break; }
   }
-  const left = oreNow(), ore = ORES.map((o, i) => ({ o, i, d: dist(o, b) + Math.random() * 8 })).filter((e) => left[e.i] > 0).sort((p, q) => p.d - q.d)[0];
+  if (b.goal && b.goal.kind === "mine" && oreNow()[b.goal.i] > 0) return b.goal; // keep at one crystal until it is empty
+  const mining = new Set([...host.bots.values()].filter((o) => o !== b && o.goal && o.goal.kind === "mine").map((o) => o.goal.i)); // spread out over the crystals
+  const left = oreNow(), ore = ORES.map((o, i) => ({ o, i, d: dist(o, b) + Math.random() * 8 + (mining.has(i) ? 12 : 0) })).filter((e) => left[e.i] > 0).sort((p, q) => p.d - q.d)[0];
   if (ore) return { kind: "mine", i: ore.i, x: ore.o.x, z: ore.o.z };
   return { kind: "post", x: Math.sin(b.post) * 4, z: Math.cos(b.post) * 4 };
 }
@@ -852,7 +865,7 @@ function shotHit(hit, by) {
 /** Build my chosen piece on tile i. */
 function buildAt(i) {
   const k = me.pick;
-  if (!k || i < 0) return;
+  if (!k || i < 0 || me.down) return;
   if (!canBuild(gridNow(), i)) { flash("Can't build there"); return; }
   if (coreNow().scrap < CONFIG.costs[k]) { flash(`Not enough scrap: a ${k} costs ${CONFIG.costs[k]}`); return; }
   if (host.acting) applyBuild(k, i, net.sessionId); else net.send("build", { k, x: i % N, y: Math.floor(i / N) });
@@ -1003,7 +1016,8 @@ addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (MOVE[k] || k === " ") e.preventDefault();
   keys.add(k);
-  const n = Number(e.key); if (n >= 1 && n <= BLUEPRINTS.length && !e.repeat) pick(BLUEPRINTS[n - 1].k);
+  const digit = /^(Digit|Numpad)([1-9])$/.exec(e.code), n = digit ? +digit[2] : 0; // by code, so Shift or Caps Lock don't stop picking
+  if (n >= 1 && n <= BLUEPRINTS.length && !e.repeat) pick(BLUEPRINTS[n - 1].k);
   if (k === "escape" && me.pick) pick(me.pick);
 });
 addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
@@ -1105,10 +1119,10 @@ function frame(now) {
 (async function start() {
   net = await connect();
   net.onState((st) => { S = st; });
-  net.on("hit", (m, from) => { if (host.acting && m && typeof m.f === "number") applyHit(m.f, from); });
-  net.on("mine", (m, from) => { if (host.acting && m && Number.isInteger(m.i)) applyMine(m.i, from); });
+  net.on("hit", (m, from) => { const f = host.acting && m && host.foes.get(m.f); if (f && shotOk(from, f.x, f.z)) applyHit(m.f, from); });
+  net.on("mine", (m, from) => { if (host.acting && m && Number.isInteger(m.i) && ORES[m.i] && shotOk(from, ORES[m.i].x, ORES[m.i].z)) applyMine(m.i, from); });
   net.on("build", (m, from) => { if (host.acting && m && Number.isInteger(m.x) && Number.isInteger(m.y) && m.x >= 0 && m.x < N && m.y >= 0 && m.y < N) applyBuild(m.k, m.y * N + m.x, from); });
-  net.on("bite", (m) => { if (m && m.to === net.sessionId) applyBite(Math.min(100, Number(m.d) || 0)); });
+  net.on("bite", (m, from) => { if (m && m.to === net.sessionId && from === livePlayers()[0]) applyBite(Math.min(100, Math.max(0, Number(m.d) || 0))); }); // only the host's monsters bite
   net.on("go", () => { if (host.acting) host.go = true; });
   net.on("again", () => { if (host.acting) host.again = true; });
   net.onDisconnect(() => { netDown = true; $("net").textContent = "Reconnecting…"; });
